@@ -66,7 +66,7 @@ typedef struct {
 	char    def;
 	char   *f;
 	size_t size;
-} unpack_format;
+} tnt_unpack_format;
 
 static inline char * varint(char *buf, uint32_t value) {
 	if ( value >= (1 << 7) ) {
@@ -85,7 +85,7 @@ static inline char * varint(char *buf, uint32_t value) {
 	return buf;
 }
 
-int varint_size(uint32_t value) {
+int tnt_varint_size(uint32_t value) {
 	if (value < (1 << 7 )) return 1;
 	if (value < (1 << 14)) return 2;
 	if (value < (1 << 21)) return 3;
@@ -116,7 +116,7 @@ lib.ping()
 
  */
 
-bool ping( char *out, size_t* outsz, char **error, uint32_t req_id ) {
+bool tnt_ping( char *out, size_t* outsz, char **error, uint32_t req_id ) {
 	buffer_check(out, *outsz, out, sizeof(tnt_hdr_t), *error);
 	tnt_hdr_t * s = (tnt_hdr_t *) out;
 	s->type  = htole32( TNT_OP_PING );
@@ -146,7 +146,7 @@ lib.call(out, outsz, err,
 
 */
 
-bool call( char *out, size_t* outsz, char **error,
+bool tnt_call( char *out, size_t* outsz, char **error,
 	uint32_t req_id, uint32_t flags, char * proc, size_t procsz, tnt_pkt_tuple_t * tuple  )
 {
 	register uniptr p;
@@ -189,120 +189,92 @@ bool call( char *out, size_t* outsz, char **error,
 	return true;
 }
 
-size_t parse_reply( char *out, size_t* outsz, char **error,
-	const char *data, size_t size, const unpack_format * format)
+
+bool tnt_reply_header(const char **data, ssize_t size, tnt_pkt_reply_t *reply)
 {
-	const char *ptr, *beg, *end;
+	const char *ptr, *end;
+	memset(reply, 0, sizeof(tnt_pkt_reply_t));
+	if ( size < sizeof(tnt_hdr_t) ) { return 0; }
 
-	if ( size < sizeof(tnt_hdr_t) ) {
-		goto shortread;
+	tnt_res_t *hd = (tnt_res_t *) *data;
+	reply->len  = le32toh( hd->len );
+	ptr = *data + 12;
+
+	if ( size < reply->len + sizeof(tnt_hdr_t) ) {
+		return 0;
 	}
-
-	beg = data;
-	tnt_res_t *hd = (tnt_res_t *) data;
-	uint32_t len  = le32toh( hd->len );
-
-	if ( size < len + sizeof(tnt_hdr_t) ) {
-		goto shortread;
-	}
-
-	tnt_pkt_reply_t * reply = calloc(1,sizeof(tnt_pkt_reply_t));
+	end = ptr + reply->len;
 
 	reply->type = le32toh( hd->type );
 	reply->code = le32toh( hd->code );
 	reply->seq  = le32toh( hd->seq );
-	
-	data += sizeof(tnt_res_t);
-	end = data + len - 4;
-	
-	switch (reply->type) {
-		case TNT_OP_PING:
-			return data - beg;
-		case TNT_OP_UPDATE:
-		case TNT_OP_INSERT:
-		case TNT_OP_DELETE:
-		case TNT_OP_SELECT:
-		case TNT_OP_CALL:
-			if (reply->code != 0) {
-				reply->error.len = end > data ? end - data - 1 : 0;
-				reply->error.str = (char *) data;
-				data = end;
-				break;
-			}
-			if (data == end) {
-				// result without tuples
-				break;
-			}
-			
-			reply->count = le32toh( ( *(uint32_t *) data ) );
-			data += 4;
-			
-			if (data >= end) {
-				// result without tuples
-				if (reply->count > 0) {
-					fprintf(stderr, "Reply %d to %d contains count:%d != 0 but have no data\n", reply->seq, reply->type, reply->count);
-					reply->count = 0;
-				}
-				break;
-			}
-			
-			int i,k;
 
-			reply->tuples = calloc(reply->count, sizeof(tnt_pkt_tuple_t));
+	// (*data) += 12;
 
-			for ( i = 0; i < reply->count; i++ ) {
-				uint32_t tsize = le32toh( ( *(uint32_t *) data ) ); data += 4;
-				tnt_pkt_tuple_t * tuple = &reply->tuples[i];
-
-				if (data + tsize > end) {
-					fprintf(stderr,"intersection type 1 in tuple: data=%p, size = %u, end = %p\n", data, tsize, end);
-					goto intersection;
-				}
-				uint32_t cardinality = le32toh( ( *(uint32_t *) data ) ); data +=4;
-				
-				tuple->count = cardinality;
-				tuple->fields = calloc(cardinality, sizeof(tnt_pkt_field_t));
-				
-				ptr = data;
-				data += tsize;
-				size -= tsize;
-				
-				for ( k=0; k < cardinality; k++ ) {
-					unsigned int fsize = 0;
-					do {
-						fsize = ( fsize << 7 ) | ( *ptr & 0x7f );
-					} while ( *ptr++ & 0x80 && ptr < end );
-					
-					if (ptr + fsize > end) {
-						fprintf(stderr,"intersection type 1 in tuple: data=%p, size = %u, end = %p\n", data, tsize, end);
-						goto intersection;
-					}
-					
-					tuple->fields[k].len = fsize;
-					tuple->fields[k].data = (char *) ptr;
-
-					ptr += fsize;
-				};
+	if (reply->len >= 4 ) { // have code in response
+		reply->code = le32toh( hd->code );
+		if (reply->code == 0) {
+			if (reply->len >= 8) { // have count in response
+				reply->count = le32toh( hd->count );
+				(*data) += sizeof(tnt_hdr_t) + 8; // set ptr to the start of tuples
+				reply->data = (char *) *data;
+				return true;
 			}
-			break;
-		default:
-			reply->code = 10; // ER_UNSUPPORTED
-			reply->error.str =        "Unknown type of operation";
-			reply->error.len = strlen("Unknown type of operation");
-			return end - beg;
+			else {
+				(*data) += sizeof(tnt_hdr_t) + reply->len;
+			}
+		}
+		else {
+			ptr += 4;
+			reply->error.len = end > ptr ? end - ptr - 1 : 0;
+			reply->error.str = (char *) ptr;
+		}
 	}
-	return end - beg;
-	
-	intersection:
-		reply->code = 8; //ER_UNUSED8
-		reply->error.str =        "Nested structure intersect packet boundary";
-		reply->error.len = strlen("Nested structure intersect packet boundary");
-		return end - beg;
-	shortread:
-		return 0;
 
+	// fast forward to the end of packet
+	(*data) += sizeof(tnt_hdr_t) + reply->len;
+
+	return true;
 }
 
+bool tnt_reply_tuple(const char **data, ssize_t size, tnt_reply_tuple_t *tuple)
+{
+	tuple->size  = le32toh( ( *(uint32_t *) *data ) ); *data +=4;
+	tuple->count = le32toh( ( *(uint32_t *) *data ) ); *data +=4;
+	tuple->next  = (char *) *data;
+
+	// if (tuple->size > size) {
+	// 	// fprintf(stderr,"intersection type 1 in tuple: data=%p, size = %u, end = %p\n", data, tsize, end);
+	// 	return false
+	// }
+	// return true
+	return tuple->size <= size;
+}
+
+bool tnt_reply_field(const char **data, ssize_t size, const char ** field, ssize_t * len)
+{
+	char *ptr = (char *)*data;
+	char *end = ptr + size;
+	ssize_t fsize = 0;
+	do {
+		fsize = ( fsize << 7 ) | ( *ptr & 0x7f );
+	} while ( *ptr++ & 0x80 && ptr < end );
+	
+	if (ptr + fsize > end) {
+		// fprintf(stderr,"intersection type 1 in tuple: data=%p, size = %u, end = %p\n", data, tsize, end);
+		return false;
+	}
+	*len = fsize;
+	*field = (char *) ptr;
+	*data = ptr + fsize;
+	return true;
+}
+
+#include "xd.h"
+
+char * hexdump(char *data, size_t size, xd_conf *cf) {
+	return xd(data, size, cf);
+}
 
 #ifdef TEST
 #include <errno.h>
@@ -319,7 +291,7 @@ int main () {
 	size_t tsz = sizeof(test);
 	char *errstr;
 
-	if( ping(test, &tsz, &errstr,0xdeadbeaf) ) {
+	if( tnt_ping(test, &tsz, &errstr,0xdeadbeaf) ) {
 		char * dump = xd(test,tsz,0);
 		if (dump) {
 			printf("Encoded: %zu:\n%s\n",tsz,dump);
@@ -334,7 +306,7 @@ int main () {
 	tnt_pkt_field_t fld = { 4, "Test" };
 	tnt_pkt_tuple_t tup = { 1, &fld };
 
-	if( call(test, &tsz, &errstr,0xdeadbeaf, 0, "method", 6, &tup) ) {
+	if( tnt_call(test, &tsz, &errstr,0xdeadbeaf, 0, "method", 6, &tup) ) {
 		char * dump = xd(test,tsz,0);
 		if (dump) {
 			printf("Encoded: %zu:\n%s\n",tsz,dump);

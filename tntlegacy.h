@@ -40,12 +40,8 @@ typedef struct {
 	uint32_t len;
 	uint32_t seq;
 	uint32_t code;
+	uint32_t count;
 } tnt_res_t;
-
-typedef struct {
-	uint32_t ns;
-	uint32_t flags;
-} tnt_hdr_nsf_t;
 
 typedef struct {
 	uint32_t type;
@@ -87,20 +83,45 @@ typedef struct {
 	tnt_pkt_field_t * fields;
 } tnt_pkt_tuple_t;
 
+// typedef struct {
+// 	int type;
+// 	int len;
+// 	int seq;
+
+// 	int code;
+
+// 	struct {
+// 		int   len;
+// 		char *str;
+// 	} error;
+
+// 	int count;
+// 	tnt_pkt_tuple_t * tuples;
+// } tnt_pkt_reply_t;
+
 typedef struct {
 	int type;
 	int len;
 	int seq;
 
 	int code;
-
-	struct {
-		int   len;
-		char *str;
-	} error;
-
-	int count;
-	tnt_pkt_tuple_t * tuples;
+	union {
+		struct {
+			int   len;
+			char *str;
+		} error;
+		struct {
+			int count;
+			char *data;
+		};
+	};
 } tnt_pkt_reply_t;
+
+
+typedef struct {
+	int size;
+	int count;
+	char *next;
+} tnt_reply_tuple_t;
 
 #endif
