@@ -164,8 +164,8 @@ bool tnt_call( char *out, size_t* outsz, char **error,
 	p.c += procsz;
 	
 	*(p.i++) = htole32( tuple->count );
-	
-	for (int i=0; i < tuple->count; i++) {
+	int i;
+	for (i=0; i < tuple->count; i++) {
 		if (tuple->fields[i].len) {
 			buffer_check(out, *outsz, p.c, tnt_field_size(tuple->fields[i].len), *error);
 			p.c = varint( p.c, tuple->fields[i].len );
