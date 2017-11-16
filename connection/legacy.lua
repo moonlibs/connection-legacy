@@ -298,7 +298,9 @@ function M:on_read(is_last)
 	local pkoft = 0
 	local avail = self.avail
 	-- print("on_read ",self.avail)
-	print("read\n"..xd(ffi.string(self.rbuf,self.avail)))
+	if M.debug.verbose then
+		print("read\n"..xd(ffi.string(self.rbuf,self.avail)))
+	end
 
 	if M.debug.rbuf then self:_buffer_state() end
 
@@ -355,7 +357,9 @@ function M:on_read(is_last)
 				end
 			end)()
 
-			print(dump(res))
+			if M.debug.verbose then
+				print(dump(res))
+			end
 
 			if type(self.req[ reply.seq ]) ~= 'number' then
 				self.req[ reply.seq ]:put(res)

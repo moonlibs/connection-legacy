@@ -22,6 +22,9 @@ end
 -- print(ffi.C.TNT_UPDATE_INSERT)
 
 local tnt = require 'connection.legacy'
+-- Enable verbose debug print (disabled by default)
+tnt.debug.verbose = true
+
 -- tnt.debug.rbuf = true
 tnt.debug.pkt = true
 
