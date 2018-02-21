@@ -521,7 +521,7 @@ function M:call(proc,...)
 		fields[i-1].data = ffi.cast('char *',val)
 		outsize = outsize + 5 + #val
 	end
-	tuple[0].count = 1
+	tuple[0].count = count
 	tuple[0].fields = fields
 	local out = ffi.new('char[?]',outsize)
 	sz_ptr[0] = ffi.sizeof(out)
