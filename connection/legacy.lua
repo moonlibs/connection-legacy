@@ -152,6 +152,10 @@ ffi.fundef("tnt_call",[[
 		size_t procsz, tnt_pkt_tuple_t * tuple  );
 ]], lib)
 
+ffi.fundef("tnt_ping",[[
+	bool tnt_ping( char *out, size_t* outsz, char **error, uint32_t req_id );
+]], lib)
+
 -- ffi.fundef("tnt_reply",[[
 -- 	size_t tnt_reply( tnt_pkt_reply_t *reply, const char *data, size_t size);
 -- ]], lib)
@@ -361,13 +365,21 @@ function M:on_read(is_last)
 				print(dump(res))
 			end
 
-			if type(self.req[ reply.seq ]) ~= 'number' then
-				self.req[ reply.seq ]:put(res)
+			if self.req[ reply.seq ] then
+				-- It's not a brilliant idea, but it should work
+				if type(self.req[ reply.seq ]) ~= 'number' then
+					self.req[ reply.seq ]:put(res)
+				else
+					log.info(
+						"Received timed out %s#%s after %0.4fs",
+						C2R[ reply.type ], reply.seq, fiber.time() - self.req[ reply.seq ]
+					)
+				end
 			else
-				log.info(
-					"Received timed out %s#%s after %0.4fs",
-					C2R[ reply.type ], reply.seq, fiber.time() - self.req[ reply.seq ]
-				)
+					log.info(
+						"Received %s#%s that we are not expecting through this connection",
+						C2R[ reply.type ], reply.seq
+					)
 			end
 			self.req[ reply.seq ] = nil
 
@@ -506,8 +518,17 @@ function M:_waitres( seq )
 end
 
 function M:ping()
-	local res,err = pcall(self.request, self, 65280,'')
-	return res
+	local out = ffi.new('char[?]', 12)
+	sz_ptr[0] = ffi.sizeof(out)
+	if not lib.tnt_ping(out, sz_ptr, char_ptr, seq) then
+		error("Failed to create packet: "..ffi.string(char_ptr[0]),2);
+	end
+	
+	self:push_write(out, sz_ptr[0]);
+	self:flush()
+	-- We don't expect any tuple
+	self:_waitres(seq)
+	return true
 end
 
 function M:call(proc,...)
