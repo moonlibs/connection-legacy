@@ -490,10 +490,8 @@ end
 -- end
 
 function M:_waitres( seq )
-	local ch = fiber.channel(1)
-	self.req[ seq ] = ch
 	local now = fiber.time()
-	local body = ch:get( self.timeout ) -- timeout?
+	local body = self.req[ seq ]:get( self.timeout ) -- timeout?
 	--print("got body = ",body, " ",self.lasterror)
 	if body then
 		if body[1] == 0 then
@@ -518,12 +516,15 @@ function M:_waitres( seq )
 end
 
 function M:ping()
+	local seq = self.seq()
+	
 	local out = ffi.new('char[?]', 12)
 	sz_ptr[0] = ffi.sizeof(out)
 	if not lib.tnt_ping(out, sz_ptr, char_ptr, seq) then
 		error("Failed to create packet: "..ffi.string(char_ptr[0]),2);
 	end
 	
+	self.req[ seq ] = fiber.channel(1)
 	self:push_write(out, sz_ptr[0]);
 	self:flush()
 	-- We don't expect any tuple
@@ -564,6 +565,7 @@ function M:call(proc,...)
 	end
 	-- local str = ffi.string(out,sz_ptr[0])
 	-- print(xd( str ))
+	self.req[ seq ] = fiber.channel(1)
 	self:push_write(out,sz_ptr[0]);
 	self:flush()
 	return self:_waitres(seq)
