@@ -94,39 +94,21 @@ local tnt_pkt_tuple_t = ffi.typedef("tnt_pkt_tuple_t",[[
 	} tnt_pkt_tuple_t;
 ]])
 
--- local tnt_pkt_reply_t = ffi.typedef("tnt_pkt_reply_t",[[
--- 	typedef struct {
--- 		int type;
--- 		int len;
--- 		int seq;
-
--- 		int code;
-
--- 		struct {
--- 			int   len;
--- 			char *str;
--- 		} error;
-
--- 		int count;
--- 		tnt_pkt_tuple_t * tuples;
--- 	} tnt_pkt_reply_t;
--- ]])
-
 local tnt_pkt_reply_t = ffi.typedef("tnt_pkt_reply_t",[[
 	typedef struct {
-		int type;
-		int len;
-		int seq;
+		uint32_t type;
+		uint32_t len;
+		uint32_t seq;
 
-		int code;
+		uint32_t code;
 
 		union {
 			struct {
-				int   len;
+				uint32_t   len;
 				char *str;
 			} error;
 			struct {
-				int    count;
+				uint32_t    count;
 				char * data;
 			};
 		};
@@ -135,8 +117,8 @@ local tnt_pkt_reply_t = ffi.typedef("tnt_pkt_reply_t",[[
 
 local tnt_reply_tuple_t = ffi.typedef("tnt_reply_tuple_t",[[
 	typedef struct {
-		int size;
-		int count;
+		uint32_t size;
+		uint32_t count;
 		char *next;
 	} tnt_reply_tuple_t;
 ]])
