@@ -4,9 +4,7 @@ local connection = require 'connection'
 
 local ffi = require 'ffi'
 local C = ffi.C
--- local lib = ffi.load('libtntlegacy.so')
 local lib = ffi.load(package.searchpath('libtntlegacy', package.cpath), true)
-
 
 local fiber = require 'fiber'
 
@@ -237,21 +235,21 @@ local char_ptr = ffi.new('char *[?]',1);
 local tuple_r = ffi.new('tnt_reply_tuple_t')
 
 local tuple = ffi.new('tnt_pkt_tuple_t[?]',1)
--- local fixbuf = ffi.new('char[?]',4096)
 local reply = ffi.new('tnt_pkt_reply_t')
 local ptr = ffi.new('char *[3]')
-local fld = ffi.new('char *[1]')
 
-local seq = 0
-function M.seq()
-	seq = seq < 0xffffffff and seq + 1 or 1
-	return seq
+do
+	local seq = 0
+	function M.seq()
+		seq = seq < 0xffffffff and seq + 1 or 1
+		return seq
+	end
 end
 
 function M:_init(...)
 	-- getmetatable( self.__index ).__index.init( self,... )
 	self:super(M, '_init')(...)
-	self.req = setmetatable({},{__mode = "kv"})
+	self.req = {}
 end
 
 function M:_cleanup(e)
@@ -282,7 +280,6 @@ end
 
 function M:on_read(is_last)
 	local pkoft = 0
-	local avail = self.avail
 	-- print("on_read ",self.avail)
 	if M.debug.verbose then
 		print("read\n"..xd(ffi.string(self.rbuf,self.avail)))
@@ -296,7 +293,6 @@ function M:on_read(is_last)
 		ptr[0] = self.rbuf + pkoft -- parse start
 		-- print(ptr,ptr[0],ptr[1],ptr[1])
 		if lib.tnt_reply_header( ptr, ptr[2]-ptr[0], reply ) then
-			local res;
 			-- print("something parsed, left ",ptr[2]-ptr[0])
 
 			pkoft = pkoft + 12 + reply.len
@@ -347,6 +343,10 @@ function M:on_read(is_last)
 				print(dump(res))
 			end
 
+			-- posible values are:
+			-- 1. fiber.channel - we have consumer and we sent response to it
+			-- 2. number - consumer stoped waiting. We warn message and clear table `req`
+			-- 3. nil - impossible as soon as self.req is not a weak table
 			if self.req[ reply.seq ] then
 				-- It's not a brilliant idea, but it should work
 				if type(self.req[ reply.seq ]) ~= 'number' then
@@ -358,13 +358,12 @@ function M:on_read(is_last)
 					)
 				end
 			else
-					log.info(
-						"Received %s#%s that we are not expecting through this connection",
-						C2R[ reply.type ], reply.seq
-					)
+				log.error(
+					"Received %s#%s that we are not expecting through this connection",
+					C2R[ reply.type ], reply.seq
+				)
 			end
 			self.req[ reply.seq ] = nil
-
 		else
 			break
 		end
@@ -374,102 +373,6 @@ function M:on_read(is_last)
 	return
 end
 
--- maybe later I compare the speed with the following code...
-
--- function M:on_read(is_last)
--- 	local pkoft = 0
--- 	local avail = self.avail
--- 	-- print("on_read ",self.avail)
--- 	print("read\n"..xd(ffi.string(self.rbuf,self.avail)))
-
--- 	if M.debug.rbuf then self:_buffer_state() end
-
-
--- 	while self.avail - pkoft >= 12 do
--- 		local hdr = ffi.cast('tnt_res_t *',self.rbuf + pkoft)
--- 		if self.avail - pkoft >= 12 + hdr.len then
--- 			pkoft = pkoft + 12
--- 			if M.debug.pkt then print("[I] PKT ",C2R[hdr.type],'#',hdr.seq,' + ',hdr.len) end
--- 			if self.req[ hdr.seq ] then
--- 				if type(self.req[ hdr.seq ]) ~= 'number' then
--- 					local res
--- 					if hdr.len >= 4 then
--- 						local code = hdr.code
--- 						if code == 0 then
--- 							-- ffi.string( self.rbuf + pkoft + 4, hdr.len-4 ))
--- 							if hdr.len >= 8 then
--- 								local tuples = {}
--- 								local data = ffi.cast("char *", self.rbuf + pkoft + 8)
--- 								local fin = data + (hdr.len - 8)
--- 								local res = (function()
--- 									local tuples = {}
--- 									for t = 0,hdr.count-1 do
--- 										print("tuple ", t)
--- 										if data >= fin then
--- 											return {8,"intersection"}
--- 										end
--- 										local tsize = ffi.cast('uint32_t *',data)[0]
--- 										local fcount = ffi.cast('uint32_t *',data + 4)[0]
--- 										print(tsize, fcount)
--- 										data = data + 8
--- 										if data + tsize > fin then
--- 											log.info("%s + %s - %s",data,tsize,fin)
--- 											return {8,"intersection of tuple"}
--- 										end
--- 										local row  = {}
--- 										for f = 0,fcount-1 do
--- 											local fsize = 0
--- 											while true do
--- 												print("fsize... ",fsize, bit.band(data[0],0x7f))
--- 												fsize = bit.bor(bit.lshift(fsize,7),
--- 													bit.band(data[0],0x7f))
--- 												if bit.band(data[0],0x80) == 0 or data > fin then break end
--- 												data = data + 1
--- 											end
--- 											data = data + 1
--- 											print("fsize = ",fsize)
--- 											print("field = ",ffi.string(data,fsize))
--- 											if data + fsize > fin then
--- 												return {8,"intersection of field"}
--- 											end
--- 											table.insert(row,ffi.string(data,fsize))
--- 											data = data + fsize
--- 										end
--- 										table.insert(tuples,row)
--- 									end
--- 									return {0,tuples}
--- 								end)()
--- 								print(dump(res))
--- 							else
--- 								-- have no count field in struct => no tuples (VERY LEGACY)
--- 								res = {0,{}}
--- 							end
--- 						else
--- 							res = { tonumber(code), ffi.string( self.rbuf + pkoft + 4, hdr.len-4 ) }
--- 						end
--- 					else
--- 						-- empty response. (OMG)
--- 						res = {0,{}}
--- 					end
--- 					self.req[ hdr.seq ]:put(res)
--- 				else
--- 					print("Received timed out ",C2R[ hdr.type ], "#",hdr.seq," after ",string.format( "%0.4fs", fiber.time() - self.req[ hdr.seq ] ))
--- 				end
--- 				self.req[ hdr.seq ] = nil
--- 			else
--- 				print("Got no requestor for ",hdr.seq)
--- 			end
--- 			pkoft = pkoft + hdr.len
--- 		else
--- 			if hdr.len + 12 > self.maxbuf then
--- 				self:_buffer_state()
--- 				print("[E] Received too big packet ",C2R[hdr.type],'#',hdr.seq,' + ', hdr.len,". Max avail: ",self.maxbuf)
--- 			end
--- 			break
--- 		end
--- 	end
--- 	self.avail = self.avail - pkoft
--- end
 
 function M:_waitres( seq )
 	local now = fiber.time()
