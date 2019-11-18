@@ -456,6 +456,18 @@ function M:call(proc,...)
 	return self:_waitres(seq)
 end
 
+function M:shutdown(timeout)
+	timeout = timeout or 2 * self.timeout
+	fiber.create(function(self)
+		local start = fiber.time()
+		repeat
+			fiber.sleep(0.01)
+		until next(self.req) == nil or timeout < fiber.time() - start
+
+		self:log('N', 'shutdowning connection since %.4fs', fiber.time() - start)
+		self:close()
+	end, self)
+end
 
 -- function M:lua(proc,...)
 -- 		--[[
