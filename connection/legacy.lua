@@ -278,6 +278,42 @@ function M:_buffer_state()
 	end
 end
 
+local function parser()
+	if reply.code ~= 0 then
+		return { tonumber(reply.code), ffi.string( reply.error.str, reply.error.len ) }
+	end
+	local tuples = {}
+	for t = 0,reply.count-1 do
+		if not lib.tnt_reply_tuple(ptr, ptr[1]-ptr[0], tuple_r) then
+			-- in case of false, skip tuple and log error
+			log.error("tuple %s boundary intersection need:%s, have:%s",(t+1), tuple_r.size, ptr[1]-ptr[0])
+			return { 8, "Tuple boundary intersection" }
+		end
+
+		local row = {}
+		for f = 0,tuple_r.count-1 do
+			if not lib.tnt_reply_field(ptr, ptr[1]-ptr[0], char_ptr, sz_ptr) then
+				log.error("tuple %s field %s boundary intersection, have:%s",t+1, f+1, ptr[1]-ptr[0])
+				return { 8, "Field boundary intersection" }
+			end
+
+			table.insert(row, ffi.string(char_ptr[0], sz_ptr[0]))
+		end
+		table.insert(tuples,row)
+	end
+	return { 0, tuples }
+end
+
+function M:on_the_fly()
+	local on_the_fly = 0
+	for _, value in pairs(self.req) do
+		if debug.getmetatable(value).__metatable == 'fiber.channel' then
+			on_the_fly = on_the_fly + 1
+		end
+	end
+	return on_the_fly
+end
+
 function M:on_read(is_last)
 	local pkoft = 0
 	-- print("on_read ",self.avail)
@@ -298,46 +334,7 @@ function M:on_read(is_last)
 			pkoft = pkoft + 12 + reply.len
 			ptr[1] = self.rbuf + pkoft -- end of packet
 
-			-- print(dump({
-			-- 	type = reply.type;
-			-- 	code = reply.code;
-			-- 	len  = reply.len;
-			-- 	seq  = reply.seq;
-			-- 	count = reply.code == 0 and reply.count or nil;
-			-- 	error = reply.code > 0 and ffi.string(reply.error.str,reply.error.len) or nil;
-			-- }));
-
-			local res = (function()
-				if reply.code == 0 then
-					local tuples = {}
-					for t = 0,reply.count-1 do
-						if lib.tnt_reply_tuple( ptr, ptr[1]-ptr[0], tuple_r ) then
-							-- print(dump{
-							-- 	size = tuple_r.size,
-							-- 	count = tuple_r.count,
-							-- })
-							local row = {}
-							for f = 0,tuple_r.count-1 do
-								if lib.tnt_reply_field( ptr, ptr[1]-ptr[0], char_ptr, sz_ptr ) then
-									-- print("got field",f, sz_ptr[0], ffi.string( char_ptr[0],sz_ptr[0] ))
-									table.insert(row, ffi.string( char_ptr[0],sz_ptr[0] ))
-								else
-									log.error("tuple %s field %s boundary intersection, have:%s",t+1, f+1, ptr[1]-ptr[0])
-									return { 8, "Field boundary intersection" }
-								end
-							end
-							table.insert(tuples,row)
-						else
-							-- in case of false, skip tuple and log error
-							log.error("tuple %s boundary intersection need:%s, have:%s",(t+1), tuple_r.size, ptr[1]-ptr[0])
-							return { 8, "Tuple boundary intersection" }
-						end
-					end
-					return { 0, tuples }
-				else
-					return { tonumber(reply.code), ffi.string( reply.error.str, reply.error.len ) }
-				end
-			end)()
+			local res = parser()
 
 			if M.debug.verbose then
 				print(dump(res))
@@ -346,7 +343,6 @@ function M:on_read(is_last)
 			-- posible values are:
 			-- 1. fiber.channel - we have consumer and we sent response to it
 			-- 2. number - consumer stoped waiting. We warn message and clear table `req`
-			-- 3. nil - impossible as soon as self.req is not a weak table
 			if self.req[ reply.seq ] then
 				-- It's not a brilliant idea, but it should work
 				if type(self.req[ reply.seq ]) ~= 'number' then
@@ -370,6 +366,10 @@ function M:on_read(is_last)
 	end
 	self.avail = self.avail - pkoft
 
+	if self.in_shutdown and self:on_the_fly() == 0 then
+		pcall(self.in_shutdown.put, self.in_shutdown, true, 0)
+	end
+
 	return
 end
 
@@ -377,7 +377,7 @@ end
 function M:_waitres( seq )
 	local now = fiber.time()
 	local body = self.req[ seq ]:get( self.timeout ) -- timeout?
-	--print("got body = ",body, " ",self.lasterror)
+
 	if body then
 		if body[1] == 0 then
 			return unpack(body[2])
@@ -394,13 +394,13 @@ function M:_waitres( seq )
 		self.req[ seq ] = now
 		self.ERROR = nil
 		error("Request #"..seq.." timed out after "..string.format( "%0.4fs", fiber.time() - now ),2)
-
 	end
-
-	-- body
 end
 
 function M:ping()
+	if self.in_shutdown then
+		error("Connection is in shutdown state", 2)
+	end
 	local seq = self.seq()
 	
 	local out = ffi.new('char[?]', 12)
@@ -418,6 +418,9 @@ function M:ping()
 end
 
 function M:call(proc,...)
+	if self.in_shutdown then
+		error("Connection is in shutdown state", 2)
+	end
 	local seq = self.seq()
 	local count = select('#',...)
 	local outsize = 12 + #proc + 5 + 4
@@ -458,15 +461,24 @@ end
 
 function M:shutdown(timeout)
 	timeout = timeout or 2 * self.timeout
-	fiber.create(function(self)
-		local start = fiber.time()
-		repeat
-			fiber.sleep(0.01)
-		until next(self.req) == nil or timeout < fiber.time() - start
+	if not self.in_shutdown then
+		self.in_shutdown = fiber.channel()
+	end
 
-		self:log('N', 'shutdowning connection since %.4fs', fiber.time() - start)
-		self:close()
-	end, self)
+	local deadline = fiber.time() + timeout
+	while next(self.req) and fiber.time() < deadline do
+		local ok = self.in_shutdown:get(deadline - fiber.time())
+
+		local on_the_fly = self:on_the_fly()
+		self:log('N', "shutdown: %s requests left on the fly", on_the_fly)
+
+		if ok or on_the_fly == 0 then
+			self:close()
+			return true
+		end
+	end
+
+	return false
 end
 
 -- function M:lua(proc,...)
