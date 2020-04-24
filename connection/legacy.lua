@@ -465,6 +465,12 @@ function M:shutdown(timeout)
 		self.in_shutdown = fiber.channel()
 	end
 
+	if not next(self.req) then
+		self:log('N', "shutdown no active requests")
+		self:close()
+		return true
+	end
+
 	local deadline = fiber.time() + timeout
 	while next(self.req) and fiber.time() < deadline do
 		local ok = self.in_shutdown:get(deadline - fiber.time())
