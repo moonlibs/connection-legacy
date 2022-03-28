@@ -1,7 +1,7 @@
 package = "connection-legacy"
 version = "scm-2"
 source = {
-   url = "git://github.com/moonlibs/connection-legacy.git",
+   url = "git+https://github.com/moonlibs/connection-legacy.git",
    branch = "v2"
 }
 description = {

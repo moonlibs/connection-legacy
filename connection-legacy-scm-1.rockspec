@@ -2,7 +2,7 @@ package = 'connection-legacy'
 version = 'scm-1'
 
 source  = {
-    url    = 'git://github.com/moonlibs/connection-legacy.git';
+    url    = 'git+https://github.com/moonlibs/connection-legacy.git';
     branch = 'master';
 }
 
