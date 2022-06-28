@@ -12,7 +12,7 @@ local so_lib_path do
 	if not so_lib_path then
 		so_lib_path = package.searchpath(so_lib_name, package.cpath)
 	end
-	assert(so_lib_path, "bin: failed to find "..so_lib_name)
+	assert(so_lib_path, "connection legacy: failed to find "..so_lib_name)
 end
 local lib = ffi.load(so_lib_path, true)
 
