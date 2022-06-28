@@ -4,7 +4,17 @@ local connection = require 'connection'
 
 local ffi = require 'ffi'
 local C = ffi.C
-local lib = ffi.load(package.searchpath('libtntlegacy', package.cpath), true)
+local so_lib_path do
+	local so_lib_name = 'libtntlegacy'
+	if package.search then
+		so_lib_path = package.search(so_lib_name)
+	end
+	if not so_lib_path then
+		so_lib_path = package.searchpath(so_lib_name, package.cpath)
+	end
+	assert(so_lib_path, "bin: failed to find "..so_lib_name)
+end
+local lib = ffi.load(so_lib_path, true)
 
 local fiber = require 'fiber'
 
@@ -402,13 +412,13 @@ function M:ping()
 		error("Connection is in shutdown state", 2)
 	end
 	local seq = self.seq()
-	
+
 	local out = ffi.new('char[?]', 12)
 	sz_ptr[0] = ffi.sizeof(out)
 	if not lib.tnt_ping(out, sz_ptr, char_ptr, seq) then
 		error("Failed to create packet: "..ffi.string(char_ptr[0]),2);
 	end
-	
+
 	self.req[ seq ] = fiber.channel(1)
 	self:push_write(out, sz_ptr[0]);
 	self:flush()
@@ -494,14 +504,14 @@ end
 -- 			return 123                    tuple({123})                     must be (123)
 -- 			return {123}                  tuple({123})                     must be (123)
 -- 			return {123,456}              tuple({123,456})                 must be (123,456)
-			
+
 -- 			return {{123}}                tuple({123})                     must be (123)
-			
+
 -- 			return 123,456                tuple({123}),tuple({456})        such return value prohibited. would be (123)
 -- 			return {{123},{456}}          (tuple({123}), tuple({456}))     such return value prohibited. would be (123)
 -- 		]]--
 -- 	local cnt = select('#',...)
--- 	local r = 
+-- 	local r =
 -- 	{ self:request(22,
 -- 		box.pack('iwaV',
 -- 			0,                      -- flags
